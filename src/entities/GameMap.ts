@@ -1,7 +1,6 @@
 import { Application, Graphics } from "pixi.js";
-import { gameMap } from "../config/map";
+import { gameMap, config } from "../config";
 import { Dot } from "./Dot";
-import { config } from "../config/config";
 
 export class GameMap {
   private readonly graphics: Graphics;

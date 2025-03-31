@@ -1,8 +1,9 @@
 import { Graphics } from "pixi.js";
-import { Direction, KeyMap } from "../types/types";
-import { GameMap } from "./GameMap";
+import { config } from "../config";
+import { Direction, KeyMap } from "../types";
+import { CollisionUtils, PositionUtils } from "../utils";
 import { Dot } from "./Dot";
-import { config } from "../config/config";
+import { GameMap } from "./GameMap";
 
 export class Player {
   private readonly graphics: Graphics;
@@ -35,15 +36,7 @@ export class Player {
   public handleKeyDown(key: string): void {
     if (key in this.keys) {
       this.keys[key] = true;
-      if (key === "ArrowUp") {
-        this.desiredDirection = { x: 0, y: -1 };
-      } else if (key === "ArrowDown") {
-        this.desiredDirection = { x: 0, y: 1 };
-      } else if (key === "ArrowLeft") {
-        this.desiredDirection = { x: -1, y: 0 };
-      } else if (key === "ArrowRight") {
-        this.desiredDirection = { x: 1, y: 0 };
-      }
+      this.updateDesiredDirection(key);
     }
   }
 
@@ -53,18 +46,43 @@ export class Player {
     }
   }
 
-  // метод для проверки коллизий с точками
+  // обновляет желаемое направление движения на основе нажатой клавиши
+  private updateDesiredDirection(key: string): void {
+    switch (key) {
+      case "ArrowUp":
+        this.desiredDirection = { x: 0, y: -1 };
+        break;
+      case "ArrowDown":
+        this.desiredDirection = { x: 0, y: 1 };
+        break;
+      case "ArrowLeft":
+        this.desiredDirection = { x: -1, y: 0 };
+        break;
+      case "ArrowRight":
+        this.desiredDirection = { x: 1, y: 0 };
+        break;
+    }
+  }
+
+  // проверяет столкновения с точками
   private checkDotCollisions(): void {
     const { x: playerX, y: playerY } = this.graphics;
-    const collisionDistanceSq = (config.cellSize / 2) ** 2;
+    const collisionDistance = config.cellSize / 2;
 
     for (const dot of this.dots) {
       if (dot.isCollected()) continue;
 
-      const { x, y } = dot.getPosition();
-      const distanceSq = (playerX - x) ** 2 + (playerY - y) ** 2;
+      const position = dot.getPosition();
 
-      if (distanceSq < collisionDistanceSq) {
+      if (
+        CollisionUtils.checkCollision(
+          playerX,
+          playerY,
+          position.x,
+          position.y,
+          collisionDistance
+        )
+      ) {
         dot.collect();
         this.score += config.dotPoints;
         console.log(`Score: ${this.score}`);
@@ -72,32 +90,30 @@ export class Player {
     }
   }
 
+  // создает графическое представление игрока
   private createGraphics(): void {
     this.graphics.circle(0, 0, config.cellSize / 2).fill(config.playerColor);
 
     // начальная позиция
-    this.graphics.position.set(
-      14 * config.cellSize + config.cellSize / 2,
-      23 * config.cellSize + config.cellSize / 2
-    );
+    const startPosition = PositionUtils.cellToPosition(14, 23);
+    this.graphics.position.set(startPosition.x, startPosition.y);
   }
 
-  // обработка изменения направления
-  private handleDirectionChange(centerX: number, centerY: number): void {
-    // если нет желаемого направления, то выходим
+  // обрабатывает изменение направления движения
+  private handleDirectionChange(): void {
+    // если нет желаемого направления, выходим
     if (this.desiredDirection.x === 0 && this.desiredDirection.y === 0) {
       return;
     }
 
-    // получаем информацию о текущей ячейке
-    const cellX = Math.floor(centerX / config.cellSize);
-    const cellY = Math.floor(centerY / config.cellSize);
-    const cellCenterX = cellX * config.cellSize + config.cellSize / 2;
-    const cellCenterY = cellY * config.cellSize + config.cellSize / 2;
+    const centerX = this.graphics.x;
+    const centerY = this.graphics.y;
+    const { cellX, cellY } = PositionUtils.positionToCell(centerX, centerY);
+    const cellCenter = PositionUtils.cellToPosition(cellX, cellY);
 
     // расстояние до центра ячейки
-    const distanceFromCenterX = Math.abs(centerX - cellCenterX);
-    const distanceFromCenterY = Math.abs(centerY - cellCenterY);
+    const distanceFromCenterX = Math.abs(centerX - cellCenter.x);
+    const distanceFromCenterY = Math.abs(centerY - cellCenter.y);
 
     // порог для более отзывчивого управления
     const turnThreshold = config.playerSpeed * 4;
@@ -114,11 +130,11 @@ export class Player {
 
       // выравниваем по оси, перпендикулярной желаемому направлению
       if (this.desiredDirection.x !== 0) {
-        //если хотим двигаться горизонтально, выравниваем по Y
-        this.graphics.y = cellCenterY;
+        // если хотим двигаться горизонтально, выравниваем по Y
+        this.graphics.y = cellCenter.y;
       } else {
         // если хотим двигаться вертикально, выравниваем по X
-        this.graphics.x = cellCenterX;
+        this.graphics.x = cellCenter.x;
       }
 
       // проверяем следующую позицию с учетом выравнивания
@@ -128,7 +144,14 @@ export class Player {
         this.graphics.y + this.desiredDirection.y * config.playerSpeed;
 
       // проверяем возможность движения в новом направлении
-      if (this.canMoveToPositionImproved(nextX, nextY, this.desiredDirection)) {
+      if (
+        CollisionUtils.canMoveInDirection(
+          nextX,
+          nextY,
+          this.desiredDirection,
+          this.gameMap
+        )
+      ) {
         // если можем повернуть, меняем направление
         this.currentDirection = { ...this.desiredDirection };
       } else {
@@ -139,138 +162,60 @@ export class Player {
     }
   }
 
-  // проверка возможности движения для круглого хитбокса
-  private canMoveToPositionImproved(
-    x: number,
-    y: number,
-    direction: Direction
-  ): boolean {
-    // радиус персонажа
-    const radius = config.cellSize / 2 - 1;
-
-    // базовая проверка - центр персонажа
-    if (!this.gameMap.canMove(x, y)) {
-      return false;
-    }
-
-    // проверяем точки в зависимости от направления движения
-    if (direction.x > 0) {
-      // вправо
-      return (
-        this.gameMap.canMove(x + radius, y) && // передняя точка
-        this.gameMap.canMove(x, y - radius * 0.7) && // верхняя точка (слегка ближе к центру)
-        this.gameMap.canMove(x, y + radius * 0.7)
-      ); // нижняя точка (слегка ближе к центру)
-    }
-
-    if (direction.x < 0) {
-      // влево
-      return (
-        this.gameMap.canMove(x - radius, y) && // передняя точка
-        this.gameMap.canMove(x, y - radius * 0.7) && // верхняя точка
-        this.gameMap.canMove(x, y + radius * 0.7)
-      ); // нижняя точка
-    }
-
-    if (direction.y > 0) {
-      // вниз
-      return (
-        this.gameMap.canMove(x, y + radius) && // передняя точка
-        this.gameMap.canMove(x - radius * 0.7, y) && // левая точка
-        this.gameMap.canMove(x + radius * 0.7, y)
-      ); // правая точка
-    }
-
-    if (direction.y < 0) {
-      // вверх
-      return (
-        this.gameMap.canMove(x, y - radius) && // передняя точка
-        this.gameMap.canMove(x - radius * 0.7, y) && // левая точка
-        this.gameMap.canMove(x + radius * 0.7, y)
-      ); // правая точка
-    }
-
-    // если нет направления, проверяем основные точки
-    return (
-      this.gameMap.canMove(x, y - radius) &&
-      this.gameMap.canMove(x, y + radius) &&
-      this.gameMap.canMove(x - radius, y) &&
-      this.gameMap.canMove(x + radius, y)
-    );
-  }
-
-  // обработка текущего движения
-  private handleCurrentMovement(centerX: number, centerY: number): void {
+  // обрабатывает текущее движение игрока
+  private handleCurrentMovement(): void {
     if (this.currentDirection.x === 0 && this.currentDirection.y === 0) {
       return;
     }
+
+    const centerX = this.graphics.x;
+    const centerY = this.graphics.y;
 
     // следующая позиция с учетом направления и скорости
     const nextX = centerX + this.currentDirection.x * config.playerSpeed;
     const nextY = centerY + this.currentDirection.y * config.playerSpeed;
 
     // используем улучшенный метод проверки коллизий
-    if (this.canMoveToPositionImproved(nextX, nextY, this.currentDirection)) {
+    if (
+      CollisionUtils.canMoveInDirection(
+        nextX,
+        nextY,
+        this.currentDirection,
+        this.gameMap
+      )
+    ) {
       // если можем двигаться, обновляем позицию
       this.graphics.x = nextX;
       this.graphics.y = nextY;
     } else {
-      // определяем текущую и следующую ячейки
-      const currentCellX = Math.floor(centerX / config.cellSize);
-      const currentCellY = Math.floor(centerY / config.cellSize);
-
-      const radius = config.cellSize / 2 - 1;
-
-      // симметричная обработка столкновений для всех направлений
-      if (this.currentDirection.x > 0) {
-        // вправо
-        // найдем ближайшую левую границу стены
-        let wallX = (currentCellX + 1) * config.cellSize;
-        while (
-          this.gameMap.canMove(wallX, centerY) &&
-          wallX < centerX + config.cellSize * 2
-        ) {
-          wallX += config.cellSize;
-        }
-        this.graphics.x = wallX - radius - 1;
-      } else if (this.currentDirection.x < 0) {
-        // влево
-        // найдем ближайшую правую границу стены
-        let wallX = currentCellX * config.cellSize;
-        while (
-          this.gameMap.canMove(wallX, centerY) &&
-          wallX > centerX - config.cellSize * 2
-        ) {
-          wallX -= config.cellSize;
-        }
-        this.graphics.x = wallX + config.cellSize + radius + 1;
-      } else if (this.currentDirection.y > 0) {
-        // вниз
-        // найдем ближайшую верхнюю границу стены
-        let wallY = (currentCellY + 1) * config.cellSize;
-        while (
-          this.gameMap.canMove(centerX, wallY) &&
-          wallY < centerY + config.cellSize * 2
-        ) {
-          wallY += config.cellSize;
-        }
-        this.graphics.y = wallY - radius - 1;
-      } else if (this.currentDirection.y < 0) {
-        // вверх
-        // найдем ближайшую нижнюю границу стены
-        let wallY = currentCellY * config.cellSize;
-        while (
-          this.gameMap.canMove(centerX, wallY) &&
-          wallY > centerY - config.cellSize * 2
-        ) {
-          wallY -= config.cellSize;
-        }
-        this.graphics.y = wallY + config.cellSize + radius + 1;
-      }
+      this.alignPositionAfterCollision();
     }
   }
 
-  // обработка перехода через туннель
+  // выравниваем позицию после столкновения со стеной
+  private alignPositionAfterCollision(): void {
+    const centerX = this.graphics.x;
+    const centerY = this.graphics.y;
+    const { cellX, cellY } = PositionUtils.positionToCell(centerX, centerY);
+    const radius = config.cellSize / 2 - 1;
+
+    // выравниваем позицию в зависимости от направления движения
+    if (this.currentDirection.x > 0) {
+      // движение вправо
+      this.graphics.x = (cellX + 1) * config.cellSize - radius - 1;
+    } else if (this.currentDirection.x < 0) {
+      // движение влево
+      this.graphics.x = cellX * config.cellSize + radius + 1;
+    } else if (this.currentDirection.y > 0) {
+      // движение вниз
+      this.graphics.y = (cellY + 1) * config.cellSize - radius - 1;
+    } else if (this.currentDirection.y < 0) {
+      // движение вверх
+      this.graphics.y = cellY * config.cellSize + radius + 1;
+    }
+  }
+
+  // обрабатывает переход через туннель
   private handleTunnelTransition(screenWidth: number): void {
     if (this.graphics.x < 0) {
       this.graphics.x = screenWidth;
@@ -279,12 +224,10 @@ export class Player {
     }
   }
 
+  // обновляет состояние игрока
   public update(screenWidth: number): void {
-    const centerX = this.graphics.x;
-    const centerY = this.graphics.y;
-
-    this.handleDirectionChange(centerX, centerY);
-    this.handleCurrentMovement(centerX, centerY);
+    this.handleDirectionChange();
+    this.handleCurrentMovement();
     this.handleTunnelTransition(screenWidth);
     this.checkDotCollisions();
   }

@@ -1,5 +1,5 @@
 import { Graphics } from "pixi.js";
-import { config } from "../config/config";
+import { config } from "../config";
 
 export class Dot {
   private readonly graphics: Graphics;
